@@ -154,11 +154,11 @@ def create_gmrf_signals(GSO, m_samples, noise_power=.05):
 
 def create_dinamic_gmrf_signals(GSO_list, samples_t, init_samples=0, noise_power=.05):
     assert isinstance(GSO_list, list), 'GSO_list has to be a list ofadjacency matrices'
-
     X0 = None
     X_list = []
     for i, GSO_i in enumerate(GSO_list):
         samples_i = samples_t[i] if isinstance(samples_t, list) else samples_t
+
         noise_power_i = noise_power[i] if isinstance(noise_power, list) else noise_power
         X_list.append(create_gmrf_signals(GSO_i, samples_i, noise_power_i))
 
@@ -167,3 +167,38 @@ def create_dinamic_gmrf_signals(GSO_list, samples_t, init_samples=0, noise_power
             X0 = create_gmrf_signals(GSO_list[i], init_samples, noise_power_i)
 
     return X_list, X0
+
+
+def lamb_value(n_nodes, n_samples, times=1):
+    return np.sqrt(np.log(n_nodes) / n_samples) * times 
+
+
+def plot_data(axes, data, exps, xvals, xlabel, ylabel, skip_idx=[], agg='mean', deviation=None,
+              alpha=.25, plot_func='plot'):
+    if agg == 'median':
+        agg_data = np.median(data, axis=0)
+    else:
+        agg_data = np.mean(data, axis=0)
+
+    std = np.std(data, axis=0)
+    prctile25 = np.percentile(data, 25, axis=0)
+    prctile75 = np.percentile(data, 75, axis=0)
+
+    for i, exp in enumerate(exps):
+        if i in skip_idx:
+            continue
+        getattr(axes, plot_func)(xvals, agg_data[:,i], exp['fmt'], label=exp['leg'])
+
+        if deviation == 'prctile':
+            up_ci = prctile25[:,i]
+            low_ci = prctile75[:,i]
+            axes.fill_between(xvals, low_ci, up_ci, alpha=alpha)
+        elif deviation == 'std':
+            up_ci = agg_data[:,i] + std[:,i]
+            low_ci = np.maximum(agg_data[:,i] - std[:,i], 0)
+            axes.fill_between(xvals, low_ci, up_ci, alpha=alpha)
+
+    axes.set_xlabel(xlabel)
+    axes.set_ylabel(ylabel)
+    axes.grid(True)
+    axes.legend()

@@ -2,9 +2,10 @@ import numpy as np
 from numpy import linalg as la
 
 class Offline_dyn_nti():
-    def __init__(self, opt='pgd', restart_t=False):
+    def __init__(self, opt='pgd', h=1, restart_t=False):
         if opt == 'pgd':
             self.opt_method = self.proj_prox_grad_
+            self.h = h
             self.restart_t = False
         elif opt == 'fista':
             self.restart_t = restart_t
@@ -16,11 +17,14 @@ class Offline_dyn_nti():
         Soft_thresh = lambda R, alpha: np.maximum( np.abs(R)-alpha, 0 ) * np.sign(R)
         N = Cov.shape[0]
 
-        # Distance_graphs = np.zeros_like(S_prev)
-        # D_aux = S_hat[:N_prev, :N_prev] - S_prev[:N_prev, :N_prev] 
-        # Distance_graphs[:N_prev, :N_prev] = D_aux
+        grad = Cov - la.inv(S_prev + self.scaled_I)
 
-        grad = Cov - la.inv(S_prev + self.scaled_I)  #+ alpha * Distance_graphs
+        Distance = np.zeros_like(S_prev)
+        if len(self.S_seq) > 1 and alpha > 0:
+            D_aux = S_prev[:self.nodes_prev, :self.nodes_prev] - self.S_seq[-2][-1]
+            Distance[:self.nodes_prev, :self.nodes_prev] = D_aux
+            grad += alpha * Distance
+
         S_aux = S_prev - stepsize * grad
         S_aux[np.eye(N)==0] = Soft_thresh( S_aux[np.eye(N)==0], lamb*stepsize )
             
@@ -32,8 +36,11 @@ class Offline_dyn_nti():
         eigenvals[eigenvals < 0] = 0
         S_hat = eigenvecs @ np.diag( eigenvals ) @ eigenvecs.T
 
-        return S_hat
+        if self.h < 1:
+            S_hat = self.h*S_hat + (1-self.h)*S_prev
 
+        return S_hat
+    
     def acc_proj_grad_desc_(self, S_hat, Cov, stepsize, lamb, alpha, max_iters):
         S_seq = []
         S_prev = S_hat.copy()
@@ -45,7 +52,7 @@ class Offline_dyn_nti():
             # Track sequence
             S_seq.append(S_hat.copy())
             S_prev = S_hat.copy()
-            # self.t_k = t_next
+            self.t_k = t_next
 
         return S_seq
 
@@ -61,7 +68,7 @@ class Offline_dyn_nti():
 
         return S_seq
 
-    def update_varsriables_(self, X_i, Cov_prev):
+    def update_variables_(self, X_i, Cov_prev):
         n_nodes, n_samples = X_i.shape
 
         self.scaled_I = self.epsilon*np.eye(n_nodes)
@@ -78,7 +85,8 @@ class Offline_dyn_nti():
 
         self.S_fista = S_hat.copy()
         self.t_k = 1 if  self.restart_t else self.t_k
-        self.S_seq.append([S_hat.copy()])
+        #self.S_seq.append([S_hat.copy()])
+        self.S_seq.append([])
         
         return S_hat, Cov, n_samples
 
@@ -92,26 +100,27 @@ class Offline_dyn_nti():
         self.S_dyn = []
         self.S_fista = None
         self.t_k = 1
+        self.samples_count = 0
 
 
-    def fit(self, X_dyn, lamb, stepsize, iters_sample=1, alpha=0, gamma=0.95, epsilon=.01):
+    def fit(self, X_dyn, lamb, stepsize, iters_sample=1, alpha=0, gamma=0.95, epsilon=.01,
+            track_all=False):
         self.init_variables_(gamma, epsilon)
 
         if not isinstance(X_dyn, list):
             X_dyn = [X_dyn]
 
         Cov_prev = None
-        for i, X_i in enumerate(X_dyn):
-            S_init, _, n_samples = self.update_varsriables_(X_i, Cov_prev)
+        for _, X_i in enumerate(X_dyn):
+            S_init, _, n_samples = self.update_variables_(X_i, Cov_prev)
             max_iters = n_samples * iters_sample
 
-            # NOTE: we could change this for baselines
             Cov = X_i @ X_i.T / n_samples
 
             # Solve the optproblem
             S_hat_seq =  self.opt_method(S_init, Cov, stepsize, lamb, alpha, max_iters)
 
-            self.S_seq[-1] = self.S_seq[-1] + S_hat_seq
+            self.S_seq[-1] += S_hat_seq if track_all else S_hat_seq[::iters_sample]
             self.S_dyn.append(S_hat_seq[-1].copy())
 
         return self.S_dyn
@@ -170,8 +179,8 @@ class Offline_dyn_nti():
 
 
 class Online_dyn_nti(Offline_dyn_nti):
-    def __init__(self, opt='pgd', restart_t=False , cov_update='incr'):        
-        super().__init__(opt=opt, restart_t=restart_t)
+    def __init__(self, opt='pgd', h=1, restart_t=False, cov_update='incr'):        
+        super().__init__(opt=opt, h=h, restart_t=restart_t)
 
         # Select covariance update
         if cov_update == 'incr':
@@ -180,25 +189,46 @@ class Online_dyn_nti(Offline_dyn_nti):
             self.update_cov = self.update_stationary_cov_
         elif cov_update == 'dynamic':
             self.update_cov = self.update_dynamic_cov_
+        elif cov_update == 'reset':
+            self.update_cov = self.update_reset_cov_
         else:
             raise ValueError(f'Unknown type {cov_update} of covariance update')
 
-    def update_incr_cov_(self, Cov, x_t, t_i, samples_count):
-        mask_prev = (t_i-1)/t_i * np.ones_like(Cov)
+    def update_incr_cov_(self, Cov, x_t, t_i):
+        # Check if the graph has increased the size for the first time
+        t = self.samples_count + t_i if self.nodes_prev == 0 else t_i
+
+        if self.nodes_prev == 0 and t == 1:
+            assert np.all(Cov == 0), f'Cov is not 0! {np.sum(Cov)}'
+
+        # Stationary mask for new nodes
+        mask_prev = (t-1)/t * np.ones_like(Cov)
+        mask_new = 1/t * np.ones_like(Cov)
+
+        # Dynamic mask for old nodes
+        ## Don't apply forget factor if its the first observation of the block
+        weight = 1 if self.nodes_prev == 0 and t == 1 else 1 - self.gamma
         mask_prev[:self.nodes_prev, :self.nodes_prev] = self.gamma
-        mask_new = 1/t_i * np.ones_like(Cov)
-        mask_new[:self.nodes_prev, :self.nodes_prev] = 1 - self.gamma
+        mask_new[:self.nodes_prev, :self.nodes_prev] = weight
+
         return mask_prev * Cov + mask_new * np.outer(x_t, x_t)
 
-    def update_stationary_cov_(self, Cov, x_t, t_i, samples_count):
-        return (t_i-1)/t_i * Cov + 1/t_i * np.outer(x_t, x_t)
+    def update_reset_cov_(self, Cov, x_t, t_i):
+        # Check if the graph has increased the size for the first time
+        t = self.samples_count + t_i if self.nodes_prev == 0 else t_i
+        return (t-1)/t * Cov + 1/t * np.outer(x_t, x_t)
 
-    def update_dynamic_cov_(self, Cov, x_t, t_i, samples_count):
-        cov = self.gamma * Cov + (1-self.gamma) * np.outer(x_t, x_t)
-        return self.gamma * Cov + (1-self.gamma) * np.outer(x_t, x_t)
+    def update_stationary_cov_(self, Cov, x_t, t_i):
+        t = self.samples_count + t_i
+        return (t-1)/t * Cov + 1/t * np.outer(x_t, x_t)
+
+    def update_dynamic_cov_(self, Cov, x_t, t_i):
+        ## Don't apply forget factor if its the first observation of the block
+        weight = 1 if self.nodes_prev == 0 and t_i == 1 else 1 - self.gamma
+        return self.gamma * Cov + weight * np.outer(x_t, x_t)
 
     def fit(self, X_dyn, lamb, stepsize, X_init=None, iters_sample=1, alpha=0, gamma=0.95, epsilon=.01,
-            cold_start=False):
+            cold_start=False, track_all=False):
         if not isinstance(X_dyn, list):
             X_dyn = [X_dyn]
 
@@ -206,34 +236,31 @@ class Online_dyn_nti(Offline_dyn_nti):
 
         alpha_aux = 0
 
-        # Allow for initial observations
+        # Allow for initial observation
+        Cov_prev = None
         if X_init is not None:
-            samples_count = X_init.shape[1]
-            Cov_prev = X_init @ X_init.T / samples_count
-        else:
-            Cov_prev = None
-            samples_count = 0  
+            self.samples_count += X_init.shape[1]
+            Cov_prev = X_init @ X_init.T / self.samples_count
 
-        for i, X_i in enumerate(X_dyn):
-            S_prev, Cov, n_samples = self.update_varsriables_(X_i, Cov_prev)
+        for _, X_i in enumerate(X_dyn):
+            S_prev, Cov, n_samples = self.update_variables_(X_i, Cov_prev)
 
             # Online proximal
             for t in range(n_samples):
                 x_t = X_i[:,t]
-                Cov = self.update_cov(Cov, x_t, t+1, samples_count)
+                Cov = self.update_cov(Cov, x_t, t+1)
 
                 if cold_start:
-                    S_hat = np.zeros_like(Cov)
+                    S_prev = np.zeros_like(Cov)
 
-                S_hat_seq =  self.opt_method(S_prev, Cov, stepsize, lamb, alpha, iters_sample)
+                S_hat_seq =  self.opt_method(S_prev, Cov, stepsize, lamb, alpha_aux, iters_sample)
                 S_hat = S_hat_seq[-1].copy()
 
                 # Track sequence
-                self.S_seq[-1] = self.S_seq[-1] + S_hat_seq
+                self.S_seq[-1] += S_hat_seq if track_all else [S_hat_seq[-1]]  # S_hat_seq[::iters_sample]
                 S_prev = S_hat.copy()
 
-                # samples_count += 1
-                samples_count = 0
+            self.samples_count += n_samples
 
             alpha_aux = alpha
             Cov_prev = Cov
