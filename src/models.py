@@ -142,6 +142,16 @@ class Offline_dyn_nti():
         return la.norm(S_hat / norm_S_hat - S_true / norm_S_true, 'fro')**2
         # return (la.norm(S_hat - S_true, 'fro') / norm_S_true)**2
 
+    def regret(self, Adjs_off, regret=False):
+        err = []
+        regret = []
+        for i, S_seq_i in enumerate(self.S_seq):
+            for j, S_j in enumerate(S_seq_i):
+                Adj_off = Adjs_off[i][j]
+                err.append( self.norm_sq_frob_err_(Adj_off, S_j) )
+                regret.append( np.sum(err) / len(err) )
+        return np.array(err), np.array(regret)
+
     def test_sequence_err(self, S_dyn_true):
         if not isinstance(S_dyn_true, list):
             S_dyn_true = [S_dyn_true]
@@ -149,6 +159,7 @@ class Offline_dyn_nti():
         err = []
         for i, S_seq_i in enumerate(self.S_seq):
             S_true = S_dyn_true[i]
+
             norm_S_true = la.norm(S_true[~np.eye(S_true.shape[0], dtype=bool)], 2)
 
             for j, S_j in enumerate(S_seq_i):

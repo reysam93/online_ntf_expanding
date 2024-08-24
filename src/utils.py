@@ -174,7 +174,7 @@ def lamb_value(n_nodes, n_samples, times=1):
 
 
 def plot_data(axes, data, exps, xvals, xlabel, ylabel, skip_idx=[], agg='mean', deviation=None,
-              alpha=.25, plot_func='plot'):
+              alpha=.25, plot_func='plot', dec=0):
     if agg == 'median':
         agg_data = np.median(data, axis=0)
     else:
@@ -183,6 +183,15 @@ def plot_data(axes, data, exps, xvals, xlabel, ylabel, skip_idx=[], agg='mean', 
     std = np.std(data, axis=0)
     prctile25 = np.percentile(data, 25, axis=0)
     prctile75 = np.percentile(data, 75, axis=0)
+    
+    if dec > 0:
+        idxs = np.arange(xvals[0], xvals[-1]+1, dec-1)
+        xvals = xvals[idxs]
+        agg_data = agg_data[idxs,:]
+        std = std[idxs,:]
+        prctile25 = prctile25[idxs,:]
+        prctile75 = prctile75[idxs,:]
+
 
     for i, exp in enumerate(exps):
         if i in skip_idx:
@@ -202,3 +211,58 @@ def plot_data(axes, data, exps, xvals, xlabel, ylabel, skip_idx=[], agg='mean', 
     axes.set_ylabel(ylabel)
     axes.grid(True)
     axes.legend()
+
+
+def data_to_csv(fname, models, xaxis, error):
+    header = ''
+    data = error
+    
+    data = np.concatenate((xaxis.reshape([xaxis.size, 1]), error), axis=1)
+
+    header = 'xaxis; '  
+
+    for i, model in enumerate(models):
+        header += model['leg']
+        if i < len(models)-1:
+            header += '; '
+
+    np.savetxt(fname, data, delimiter=';', header=header, comments='')
+    print('SAVED as:', fname)
+
+
+def save_data(file_name, exps, errs_dict, agg='mean', save_csv=False, dec=0):
+    err_file_name = file_name + '_errs'
+    np.savez(err_file_name, **errs_dict, Exps=exps)
+    print('SAVED as:', err_file_name)
+
+    if not save_csv:
+        return
+
+    xaxis = None
+    for key, value in errs_dict.items():
+        agg_data = np.median(value, axis=0) if agg == 'median' else np.mean(value, axis=0)
+        prctile25 = np.percentile(value, 25, axis=0)
+        prctile75 = np.percentile(value, 75, axis=0)
+
+        xaxis = np.arange(agg_data.shape[0])
+        
+        # Skip runtime
+        if len(agg_data.shape) < 2:
+            continue
+
+        if dec > 0:
+            idxs = np.arange(xaxis[0], xaxis[-1]+1, dec-1)
+            agg_data = agg_data[idxs,:]
+            xaxis = xaxis[idxs]
+            prctile25 = prctile25[idxs,:]
+            prctile75 = prctile75[idxs,:]
+        
+        
+
+        file_agg_data = f'{file_name}-{key}_{agg}.csv' 
+        file_prct25_data = f'{file_name}-{key}_prct25.csv' 
+        file_prct75_data = f'{file_name}-{key}_prct75.csv' 
+        data_to_csv(file_agg_data, exps, xaxis, agg_data)
+        data_to_csv(file_prct25_data, exps, xaxis, prctile25)
+        data_to_csv(file_prct75_data, exps, xaxis, prctile75)
+
