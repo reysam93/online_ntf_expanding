@@ -140,14 +140,12 @@ def create_gmrf_signals(GSO, m_samples, noise_power=.05):
     C_inv = (.9+.1*np.random.rand())*GSO
     Cov = la.inv(C_inv)
 
-    eigenvals, _ = np.linalg.eigh( GSO )
     X = np.random.multivariate_normal(mean, Cov, size=m_samples).T
 
     assert noise_power >= 0, 'Noise power must be nonnegative.'
     if noise_power > 0:
         power_x = la.norm(X, 2, axis=0, keepdims=True)
         noise = np.random.randn(n_nodes, m_samples) * np.sqrt(noise_power/n_nodes) * power_x
-        X0 = X
         X = X + noise
 
     return X
@@ -177,8 +175,12 @@ def plot_data(axes, data, exps, xvals, xlabel, ylabel, skip_idx=[], agg='mean', 
               alpha=.25, plot_func='plot', dec=0):
     if agg == 'median':
         agg_data = np.median(data, axis=0)
-    else:
+    elif agg == 'mean':
         agg_data = np.mean(data, axis=0)
+    elif agg is None:
+        agg_data = data
+    else:
+        raise ValueError(f'Unknown aggregation type {agg}')
 
     std = np.std(data, axis=0)
     prctile25 = np.percentile(data, 25, axis=0)
@@ -196,6 +198,8 @@ def plot_data(axes, data, exps, xvals, xlabel, ylabel, skip_idx=[], agg='mean', 
     for i, exp in enumerate(exps):
         if i in skip_idx:
             continue
+
+
         getattr(axes, plot_func)(xvals, agg_data[:,i], exp['fmt'], label=exp['leg'])
 
         if deviation == 'prctile':

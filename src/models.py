@@ -1,5 +1,6 @@
 import numpy as np
 from numpy import linalg as la
+import matplotlib.pyplot as plt
 
 class Offline_dyn_nti():
     def __init__(self, opt='pgd', h=1, restart_t=False):
@@ -29,7 +30,8 @@ class Offline_dyn_nti():
         S_aux[np.eye(N)==0] = Soft_thresh( S_aux[np.eye(N)==0], lamb*stepsize )
             
         # Projection onto non-negative values
-        S_aux[(S_aux <= 0)*(np.eye(N) == 0)] = 0
+        if self.nonneg_proj:
+            S_aux[(S_aux <= 0)*(np.eye(N) == 0)] = 0
 
         # Second projection onto PSD set
         eigenvals, eigenvecs = np.linalg.eigh( S_aux )
@@ -90,7 +92,7 @@ class Offline_dyn_nti():
         
         return S_hat, Cov, n_samples
 
-    def init_variables_(self, gamma, epsilon):
+    def init_variables_(self, gamma, epsilon, nonneg_proj):
         assert gamma >= 0 and gamma <= 1, 'Forget parameter gamma should be in the [0,1] interval'
 
         self.nodes_prev = 0
@@ -101,11 +103,12 @@ class Offline_dyn_nti():
         self.S_fista = None
         self.t_k = 1
         self.samples_count = 0
+        self.nonneg_proj = nonneg_proj
 
 
     def fit(self, X_dyn, lamb, stepsize, iters_sample=1, alpha=0, gamma=0.95, epsilon=.01,
-            track_all=False):
-        self.init_variables_(gamma, epsilon)
+            track_all=False, nonneg_proj=True):
+        self.init_variables_(gamma, epsilon, nonneg_proj)
 
         if not isinstance(X_dyn, list):
             X_dyn = [X_dyn]
@@ -187,6 +190,22 @@ class Offline_dyn_nti():
             err.append( self.norm_sq_frob_err_(S_true, S_hat) )
         
         return np.array(err)
+    
+    def convergence(self):
+        conv = []
+        S_prev = self.S_seq[0][0]
+        for i, S_seq_i in enumerate(self.S_seq):
+            for j, S_j in enumerate(S_seq_i):
+                if i == 0 and j == 0:
+                    continue
+                if j == 0:
+                    nodes = S_prev.shape[0]
+                    S_aux = S_prev
+                    S_prev = np.zeros_like(S_j)
+                    S_prev[:nodes, :nodes] = S_aux
+
+                conv.append( self.norm_sq_frob_err_(S_prev, S_j) )
+        return np.array(conv)
 
 
 class Online_dyn_nti(Offline_dyn_nti):
@@ -239,11 +258,11 @@ class Online_dyn_nti(Offline_dyn_nti):
         return self.gamma * Cov + weight * np.outer(x_t, x_t)
 
     def fit(self, X_dyn, lamb, stepsize, X_init=None, iters_sample=1, alpha=0, gamma=0.95, epsilon=.01,
-            cold_start=False, track_all=False):
+            cold_start=False, track_all=False, nonneg_proj=True):
         if not isinstance(X_dyn, list):
             X_dyn = [X_dyn]
 
-        self.init_variables_(gamma, epsilon)
+        self.init_variables_(gamma, epsilon, nonneg_proj)
 
         alpha_aux = 0
 
