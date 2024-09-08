@@ -189,10 +189,14 @@ def plot_data(axes, data, exps, xvals, xlabel, ylabel, skip_idx=[], agg='mean', 
     if dec > 0:
         idxs = np.arange(xvals[0], xvals[-1]+1, dec-1)
         xvals = xvals[idxs]
-        agg_data = agg_data[idxs,:]
-        std = std[idxs,:]
-        prctile25 = prctile25[idxs,:]
-        prctile75 = prctile75[idxs,:]
+
+        if len(agg_data.shape) > 1:
+            agg_data = agg_data[idxs,:]
+
+            if deviation in ['prctile', 'std']:
+                std = std[idxs,:]
+                prctile25 = prctile25[idxs,:]
+                prctile75 = prctile75[idxs,:]
 
 
     for i, exp in enumerate(exps):
@@ -265,7 +269,7 @@ def save_data(file_name, exps, errs_dict, agg='mean', save_csv=False, dec=0):
 
         file_agg_data = f'{file_name}-{key}_{agg}.csv' 
         file_prct25_data = f'{file_name}-{key}_prct25.csv' 
-        file_prct75_data = f'{file_name}-{key}_prct75.csv' 
+        file_prct75_data = f'{file_name}-{key}_prct75.csv'
         data_to_csv(file_agg_data, exps, xaxis, agg_data)
         data_to_csv(file_prct25_data, exps, xaxis, prctile25)
         data_to_csv(file_prct75_data, exps, xaxis, prctile75)
